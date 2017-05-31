@@ -45,7 +45,7 @@ static volatile uint8_t _ucRow = 0;
 static volatile uint16_t _pucValues[ MATRIX_ROWS ];
 
 /* Animation - Lines counting up and down */
-static volatile bool _pbCountBackward[ MATRIX_ROWS ]; 
+static volatile bool _pbCountBackward[ MATRIX_ROWS ];
 
 /* Timer count */
 
@@ -57,16 +57,16 @@ const uint16_t USFreqFrc1 = 10000;
 
 void vDisplayInterruptHandler( void )
 {
-    
+
     switch ( _ucFrc1Count++ )
     {
         case T_LOW:
 
             gpio_write( ICounterClkPin, 0 );
             gpio_write( IShiftClkPin, 0 );
-            spi_transfer_16( 1, _pucValues[ _ucRow ] ); 
+            spi_transfer_16( 1, _pucValues[ _ucRow ] );
             gpio_write( IShiftClkPin, 1 );
-            _ucRow = ( _ucRow + 1 ) % MATRIX_ROWS; 
+            _ucRow = ( _ucRow + 1 ) % MATRIX_ROWS;
 
             break;
         case T_HIGH:
@@ -107,7 +107,7 @@ void vCountingAnimation( void )
             printf( "Row number %d now counting %s\n", i, _pbCountBackward[ i ] ? "backward" : "forward" );
         }
 
-        _pucValues[ i ] = ( _pbCountBackward[ i ] ) ? _pucValues[ i ] >> 1 : ( _pucValues[ i ] << 1 ) + 1; 
+        _pucValues[ i ] = ( _pbCountBackward[ i ] ) ? _pucValues[ i ] >> 1 : ( _pucValues[ i ] << 1 ) + 1;
         printf( "Row number %d now counting %s to %u\n", i, _pbCountBackward[ i ] ? "down" : "up", _pucValues[ i ] );
     }
     vTaskDelay( 1000 / portTICK_RATE_MS );
@@ -128,7 +128,7 @@ void vDisplayTask( void *pvParameters )
         printf("Row number %d : %u\n", i, _pucValues);
         _pbCountBackward[ i ] = false;
     }
-    
+
    // for ( i = 0; i < MATRIX_ROWS; i++ )
    // {
    //     _pucValues[ i ] = 0;
@@ -143,8 +143,8 @@ void vDisplayTask( void *pvParameters )
     timer_set_interrupts( FRC1, true );
     timer_set_run( FRC1, true );
 
-    
-    
+
+
     while( 1 ) {
     //    vFlashAnimation();
         vCountingAnimation();
@@ -172,7 +172,7 @@ void vDetectionTask( void *pvParameters )
 void vPeripheralInit( void )
 {
     uart_set_baud( 0, 115200 );
-    
+
     /* stop both timers and mask their interrupts as a precaution */
     timer_set_interrupts( FRC1, false );
     timer_set_run( FRC1, false );
@@ -182,7 +182,7 @@ void vPeripheralInit( void )
 
     /* configure timer frequencies */
     timer_set_frequency( FRC1, USFreqFrc1 );
-    
+
     spi_init( 1, SPI_MODE0, SPI_FREQ_DIV_125K, true, SPI_BIG_ENDIAN, true );
 
     gpio_enable( ICounterClkPin, GPIO_OUTPUT );
@@ -207,9 +207,9 @@ void vWifiInit( void )
 
 void user_init( void )
 {
-    
+
     vPeripheralInit();
-    
+
     xTaskCreate( vTemperatureTask, ( signed char * )"vTemperatureTask", 256, NULL, 1, NULL );
     xTaskCreate( vDetectionTask, ( signed char * )"vDetectionTask", 256, NULL, 1, NULL );
     xTaskCreate( vDisplayTask, ( signed char * )"vDisplayTask", 256, NULL, 2, NULL );
