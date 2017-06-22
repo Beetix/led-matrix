@@ -106,11 +106,9 @@ void vCountingAnimation( void )
         if ( _pucValues[ i ] == 1 || _pucValues[ i ] == 16383 )
         {
             _pbCountBackward[ i ] = ! _pbCountBackward[ i ];
-            printf( "Row number %d now counting %s\n", i, _pbCountBackward[ i ] ? "backward" : "forward" );
         }
 
         _pucValues[ i ] = ( _pbCountBackward[ i ] ) ? _pucValues[ i ] >> 1 : ( _pucValues[ i ] << 1 ) + 1;
-        printf( "Row number %d now counting %s to %u\n", i, _pbCountBackward[ i ] ? "down" : "up", _pucValues[ i ] );
     }
     vTaskDelayUntil( &xLastWakeTime, 1000 / portTICK_PERIOD_MS );
 }
