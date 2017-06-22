@@ -55,6 +55,8 @@ static volatile uint8_t _ucFrc1Count = 0;
  *   f = 10 kHz --> p = 100µs */
 const uint16_t USFreqFrc1 = 10000;
 
+TickType_t xLastWakeTime;
+
 void vDisplayInterruptHandler( void )
 {
 
@@ -91,7 +93,7 @@ void vFlashAnimation( void )
     {
         _pucValues[ i ] = ( _pucValues[ i ] == 0 ) ? 16383 : 0;
     }
-    vTaskDelay( 200 / portTICK_RATE_MS );
+    vTaskDelay( 200 / portTICK_PERIOD_MS );
 }
 
 
@@ -110,9 +112,7 @@ void vCountingAnimation( void )
         _pucValues[ i ] = ( _pbCountBackward[ i ] ) ? _pucValues[ i ] >> 1 : ( _pucValues[ i ] << 1 ) + 1;
         printf( "Row number %d now counting %s to %u\n", i, _pbCountBackward[ i ] ? "down" : "up", _pucValues[ i ] );
     }
-    vTaskDelay( 1000 / portTICK_RATE_MS );
-
-
+    vTaskDelayUntil( &xLastWakeTime, 1000 / portTICK_PERIOD_MS );
 }
 
 
@@ -136,7 +136,7 @@ void vDisplayTask( void *pvParameters )
     gpio_write( IShiftClkPin, 0 );
 
     gpio_write( ICounterRstPin, 1 );
-    vTaskDelay( 500 / portTICK_RATE_MS );
+    vTaskDelay( 500 / portTICK_PERIOD_MS );
     gpio_write( ICounterRstPin, 0 );
 
     /* unmask interrupts and start timers */
@@ -156,7 +156,7 @@ void vTemperatureTask( void *pvParameters )
     while( 1 )
     {
         printf( "Temperature is %.1f\n", 330.0 / 1024 * sdk_system_adc_read() );
-        vTaskDelay( 1000 / portTICK_RATE_MS );
+        vTaskDelay( 1000 / portTICK_PERIOD_MS );
     }
 }
 
@@ -165,7 +165,7 @@ void vDetectionTask( void *pvParameters )
     while( 1 )
     {
         printf( "IDetectionPin %u\n", gpio_read( IDetectionPin ) );
-        vTaskDelay( 1000 / portTICK_RATE_MS );
+        vTaskDelay( 1000 / portTICK_PERIOD_MS );
     }
 }
 
@@ -210,7 +210,7 @@ void user_init( void )
 
     vPeripheralInit();
 
-    xTaskCreate( vTemperatureTask, ( signed char * )"vTemperatureTask", 256, NULL, 1, NULL );
-    xTaskCreate( vDetectionTask, ( signed char * )"vDetectionTask", 256, NULL, 1, NULL );
-    xTaskCreate( vDisplayTask, ( signed char * )"vDisplayTask", 256, NULL, 2, NULL );
+    xTaskCreate( vTemperatureTask, "vTemperatureTask", 256, NULL, 1, NULL );
+    xTaskCreate( vDetectionTask, "vDetectionTask", 256, NULL, 1, NULL );
+    xTaskCreate( vDisplayTask, "vDisplayTask", 256, NULL, 2, NULL );
 }
