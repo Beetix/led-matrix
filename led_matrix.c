@@ -96,13 +96,44 @@ void vFlashAnimation( void )
     vTaskDelay( 200 / portTICK_PERIOD_MS );
 }
 
+void vIncrementingValueAnimation( void )
+{
+    volatile int i;
+
+    for ( i = 0; i < MATRIX_ROWS; i++ )
+    {
+        _pucValues[ i ] = ( _pucValues[ i ] + 1 ) % 16383;
+    }
+    vTaskDelayUntil( &xLastWakeTime, 1000 / portTICK_PERIOD_MS );
+}
+
+void vShiftRowAnimation( void )
+{
+    static int row = 0;
+    volatile int i;
+
+    for ( i = 0; i < MATRIX_ROWS; i++ )
+    {
+        if ( i == row )
+        {
+            _pucValues[ i ] = i + 1;
+        }
+        else
+        {
+            _pucValues[ i ] = 0;
+        }
+    }
+    row = ( row + 1 ) % MATRIX_ROWS;
+    vTaskDelayUntil( &xLastWakeTime, 1000 / portTICK_PERIOD_MS );
+}
+
 
 void vCountingAnimation( void )
 {
     volatile int i;
+
     for ( i = 0; i < MATRIX_ROWS; i++ )
     {
-
         if ( _pucValues[ i ] == 1 || _pucValues[ i ] == 16383 )
         {
             _pbCountBackward[ i ] = ! _pbCountBackward[ i ];
