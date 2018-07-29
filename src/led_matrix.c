@@ -1,14 +1,14 @@
 /*******************************************************************************
  *                                Led Matrix                                   *
- * Version 0.1                                                                 *
+ * Version 0.2                                                                 *
  * Author: Benjamin Freeman                                                    *
  *                                                                             *
  * Brief: Led Matrix project using an ESP8266                                  *
  * Features:                                                                   *
- *      - 60 Hz led display                                                    *
+ *      - Binary code modulation to control the Leds' brightness individually  *
+ *        (see http://www.batsocks.co.uk/readme/art_bcm_1.htm)                 *
  *      - Analog temperature sensor TMP35                                      *
  *      - Motion detection module                                              *
- *      - JSON data fetching with an API                                       *
  *                                                                             *
  *******************************************************************************/
 #include "espressif/esp_common.h"
@@ -17,6 +17,7 @@
 #include "task.h"
 #include "esp8266.h"
 #include "esp/spi.h"
+#include "ugui.h"
 
 /* Wifi settings */
 #define WIFI_SSID "MyWifi"
@@ -25,13 +26,10 @@
 /* Matrix settings */
 
 #define MATRIX_ROWS 14
+#define MATRIX_COLUMNS 14
 
-/* Timings for display */
-
-#define T_LOW 0
-#define T_HIGH 14
-#define T_RESET 15
-
+#define TIMESLICES 10
+#define EXTRA_TIMER_POW_2_DIV 1
 /* Decade counter pins */
 const int ICounterClkPin = 5;
 const int IShiftClkPin = 15;
@@ -41,142 +39,238 @@ const int ICounterRstPin = 12;
 const int IDetectionPin = 4;
 
 /* Display data */
-static volatile uint8_t _ucRow = 0;
-static volatile uint16_t _pucValues[ MATRIX_ROWS ];
+static volatile uint16_t _timeSlices[TIMESLICES][ MATRIX_ROWS ];
 
-/* Animation - Lines counting up and down */
-static volatile bool _pbCountBackward[ MATRIX_ROWS ];
-
-/* Timer count */
-
-static volatile uint8_t _ucFrc1Count = 0;
-
-/* Timer frequency
- *   f = 10 kHz --> p = 100µs */
-const uint16_t USFreqFrc1 = 10000;
+uint8_t brightness[MATRIX_ROWS][MATRIX_COLUMNS];
+static volatile uint8_t _currentSlice = 0;
+static volatile uint8_t _currentRow;
 
 TickType_t xLastWakeTime;
+
+UG_GUI gui;
+
+void brightnessesToTimeslices(uint8_t brightness[MATRIX_ROWS][MATRIX_COLUMNS])
+{
+	for (uint8_t currentSlice = 0; currentSlice < TIMESLICES; currentSlice++)
+	{
+        for(uint8_t currentRow = 0; currentRow < MATRIX_ROWS; currentRow++)
+        {
+            uint16_t currentSliceRowBitsValue = 0;
+            for ( uint8_t currentColumn = 0; currentColumn < MATRIX_COLUMNS; currentColumn++ )
+            {
+                if (brightness[currentRow][currentColumn] > currentSlice)
+                {
+                    currentSliceRowBitsValue |= (1 << currentColumn);
+                }
+            }
+            _timeSlices[currentSlice][currentRow] = currentSliceRowBitsValue;
+        }
+	}
+}
+
+void inline updateDisplay()
+{
+    brightnessesToTimeslices(brightness);
+}
 
 void vDisplayInterruptHandler( void )
 {
 
-    switch ( _ucFrc1Count++ )
+    timer_set_load(FRC1, 1 << (_currentSlice + EXTRA_TIMER_POW_2_DIV));
+    if (_currentSlice == 0)
     {
-        case T_LOW:
-
-            gpio_write( ICounterClkPin, 0 );
-            gpio_write( IShiftClkPin, 0 );
-            spi_transfer_16( 1, _pucValues[ _ucRow ] );
-            gpio_write( IShiftClkPin, 1 );
-            _ucRow = ( _ucRow + 1 ) % MATRIX_ROWS;
-
-            break;
-        case T_HIGH:
-
-            gpio_write( IShiftClkPin, 0 );
-            spi_transfer_16( 1, 0 );
-
-            gpio_write( ICounterClkPin, 1 );
-            gpio_write( IShiftClkPin, 1 );
-
-            break;
-        case T_RESET:
-            _ucFrc1Count = 0;
-    }
-
-}
-
-void vFlashAnimation( void )
-{
-    int i;
-    for ( i = 0; i < MATRIX_ROWS; i++ )
-    {
-        _pucValues[ i ] = ( _pucValues[ i ] == 0 ) ? 16383 : 0;
-    }
-    vTaskDelay( 200 / portTICK_PERIOD_MS );
-}
-
-void vIncrementingValueAnimation( void )
-{
-    volatile int i;
-
-    for ( i = 0; i < MATRIX_ROWS; i++ )
-    {
-        _pucValues[ i ] = ( _pucValues[ i ] + 1 ) % 16383;
-    }
-    vTaskDelayUntil( &xLastWakeTime, 1000 / portTICK_PERIOD_MS );
-}
-
-void vShiftRowAnimation( void )
-{
-    static int row = 0;
-    volatile int i;
-
-    for ( i = 0; i < MATRIX_ROWS; i++ )
-    {
-        if ( i == row )
+        if (_currentRow == MATRIX_ROWS - 1)
         {
-            _pucValues[ i ] = i + 1;
+            gpio_write(ICounterRstPin, 1);
+            gpio_write(ICounterRstPin, 0);
         }
         else
         {
-            _pucValues[ i ] = 0;
+            gpio_write(ICounterClkPin, 0);
+            gpio_write(ICounterClkPin, 1);
         }
+
+        _currentRow = (_currentRow + 1) % MATRIX_ROWS;
     }
-    row = ( row + 1 ) % MATRIX_ROWS;
-    vTaskDelayUntil( &xLastWakeTime, 1000 / portTICK_PERIOD_MS );
-}
 
-
-void vCountingAnimation( void )
-{
-    volatile int i;
-
-    for ( i = 0; i < MATRIX_ROWS; i++ )
+    if (_currentSlice == TIMESLICES)
     {
-        if ( _pucValues[ i ] == 1 || _pucValues[ i ] == 16383 )
-        {
-            _pbCountBackward[ i ] = ! _pbCountBackward[ i ];
-        }
-
-        _pucValues[ i ] = ( _pbCountBackward[ i ] ) ? _pucValues[ i ] >> 1 : ( _pucValues[ i ] << 1 ) + 1;
+        gpio_write(IShiftClkPin,0);
+        spi_transfer_16(1, 0);
+        gpio_write(IShiftClkPin, 1);
     }
-    vTaskDelayUntil( &xLastWakeTime, 1000 / portTICK_PERIOD_MS );
+    else
+    {
+        gpio_write(IShiftClkPin,0);
+        spi_transfer_16(1, _timeSlices[_currentSlice][_currentRow]);
+        gpio_write(IShiftClkPin, 1);
+    }
+
+    _currentSlice = (_currentSlice + 1) % (TIMESLICES + 1);
 }
 
-
+void pset(UG_S16 x, UG_S16 y, UG_COLOR col)
+{
+    if ( col > 0 )
+    {
+        brightness[y][x] = col;
+    }
+    else
+    {
+        brightness[y][x] = col;
+    }
+}
 
 void vDisplayTask( void *pvParameters )
 {
-    int i;
-    _pucValues [ 0 ] = 1;
-    _pbCountBackward[ 0 ] = true;
-    for ( i = 1; i < MATRIX_ROWS; i++ )
-    {
-        _pucValues[ i ] = ( _pucValues[ i - 1 ] << 1 ) + 1;
-        printf("Row number %d : %u\n", i, _pucValues);
-        _pbCountBackward[ i ] = false;
-    }
-
-   // for ( i = 0; i < MATRIX_ROWS; i++ )
-   // {
-   //     _pucValues[ i ] = 0;
-   // }
-    gpio_write( IShiftClkPin, 0 );
-
-    gpio_write( ICounterRstPin, 1 );
-    vTaskDelay( 500 / portTICK_PERIOD_MS );
-    gpio_write( ICounterRstPin, 0 );
+    UG_COLOR foreBrightness = 2;
+    UG_Init(&gui, pset, 14, 14);
+    UG_SetForecolor(foreBrightness);
+    UG_SetBackcolor(0);
 
     /* unmask interrupts and start timers */
     timer_set_interrupts( FRC1, true );
     timer_set_run( FRC1, true );
 
+    UG_FontSelect(&FONT_8X12);
+
+    char greeting[] = "LED MATRIX";
+    char * currentChar = greeting;
+    while (*currentChar)
+    {
+        UG_PutChar(*currentChar,3,1,foreBrightness,0);
+        updateDisplay();
+        vTaskDelayUntil( &xLastWakeTime, 200 / portTICK_PERIOD_MS );
+        currentChar++;
+    }
+
+    UG_FontSelect(&FONT_4X6);
+
+    char displayChar = 'A';
+
+    while (1)
+    {
+        char c = uart_getc_nowait(0);
+        if (c == 'u')
+        {
+            printf("Increasing brightness to %d\n", foreBrightness + 1);
+            foreBrightness++;
+            UG_SetForecolor(foreBrightness);
+        }
+        else if (c == 'd')
+        {
+            printf("Decreasing brightness to %d\n", foreBrightness - 1);
+            foreBrightness--;
+            UG_SetForecolor(foreBrightness);
+        }
+        else if (c == 'r')
+        {
+            printf("Reseting brightness\n");
+            UG_FillScreen(0);
+            updateDisplay();
+        }
+        else if (c == 'a')
+        {
+            printf("Arrow\n");
+            brightness[0][0] = foreBrightness;
+            brightness[1][0] = foreBrightness;
+            brightness[1][1] = foreBrightness;
+            brightness[2][0] = foreBrightness;
+            updateDisplay();
+        }
+        else if (c == 'c')
+        {
+            printf("Calibration\n");
+            brightness[0][0] = foreBrightness;
+            brightness[1][1] = foreBrightness;
+            brightness[MATRIX_ROWS-1][MATRIX_COLUMNS-1] = foreBrightness;
+            updateDisplay();
+        }
+        else if (c == 'g')
+        {
+            printf("Drawing rectangle\n");
+            UG_FillFrame(0,0,4,4,foreBrightness);
+            updateDisplay();
+        }
+        else if (c == 't')
+        {
+            printf("Drawing text\n");
+            UG_PutString(0,0,"42");
+            updateDisplay();
+        }
+        else if (c == 'y')
+        {
+            printf("Char demo\n");
+            UG_FontSelect(&FONT_8X12);
+            do
+            {
+                UG_PutChar(displayChar++,0,0,foreBrightness,0);
+                updateDisplay();
+                vTaskDelayUntil( &xLastWakeTime, 500 / portTICK_PERIOD_MS );
+            } while (uart_getc_nowait(0) != 'y');
+            UG_FontSelect(&FONT_4X6);
+        }
+        else if (c == 'b')
+        {
+            printf("Brightness demo\n");
+            do
+            {
+                UG_FillFrame(5,5,10,10,foreBrightness);
+                updateDisplay();
+                foreBrightness = (foreBrightness + 1) % TIMESLICES;
+                vTaskDelayUntil( &xLastWakeTime, 500 / portTICK_PERIOD_MS );
+            } while (uart_getc_nowait(0) != 'b');
+        }
+        else if (c == 'w')
+        {
+            printf("Temperature demo\n");
+            do
+            {
+                int temp = 330.0 / 1024 * sdk_system_adc_read();
+                UG_PutChar(temp / 10 + '0', 0, 5, foreBrightness, 0);
+                UG_PutChar(temp % 10 + '0', 4, 5, foreBrightness, 0);
+                UG_PutChar('c', 9, 5, foreBrightness, 0);
+
+                pset(8,5,foreBrightness);
+                pset(10,5,foreBrightness);
+                pset(9,4,foreBrightness);
+                pset(9,6,foreBrightness);
+
+                updateDisplay();
+                vTaskDelayUntil( &xLastWakeTime, 500 / portTICK_PERIOD_MS );
+            } while (uart_getc_nowait(0) != 'w');
+        }
+        else if (c == 'p')
+        {
+            printf("Presence demo\n");
+            UG_FontSelect(&FONT_8X12);
+            bool toggle = false;
+            do
+            {
+                if (gpio_read( IDetectionPin ))
+                {
+                    if (toggle)
+                    {
+                        UG_PutChar(3, 3, 2, foreBrightness, 0);
+                    }
+                    else
+                    {
+                        UG_PutChar(1, 3, 2, foreBrightness, 0);
+                    }
+                    toggle = !toggle;
+                }
+                else
+                {
+                    UG_PutChar(0, 3, 2, foreBrightness, 0);
+                }
+                updateDisplay();
+                vTaskDelayUntil( &xLastWakeTime, 1000 / portTICK_PERIOD_MS );
+            } while (uart_getc_nowait(0) != 'p');
+            UG_FontSelect(&FONT_4X6);
+        }
 
 
-    while( 1 ) {
-    //    vFlashAnimation();
-        vCountingAnimation();
+        vTaskDelayUntil( &xLastWakeTime, 100 / portTICK_PERIOD_MS );
     }
 }
 
@@ -210,9 +304,11 @@ void vPeripheralInit( void )
     _xt_isr_attach( INUM_TIMER_FRC1, vDisplayInterruptHandler );
 
     /* configure timer frequencies */
-    timer_set_frequency( FRC1, USFreqFrc1 );
+    timer_set_divider(FRC1, TIMER_CLKDIV_16);
+    timer_set_load(FRC1, (1 << EXTRA_TIMER_POW_2_DIV));
+    timer_set_reload(FRC1, false);
 
-    spi_init( 1, SPI_MODE0, SPI_FREQ_DIV_125K, true, SPI_BIG_ENDIAN, true );
+    spi_init( 1, SPI_MODE0, SPI_FREQ_DIV_1M, true, SPI_BIG_ENDIAN, true );
 
     gpio_enable( ICounterClkPin, GPIO_OUTPUT );
     gpio_enable( IShiftClkPin, GPIO_OUTPUT );
@@ -237,9 +333,10 @@ void vWifiInit( void )
 void user_init( void )
 {
 
+    sdk_wifi_set_opmode(NULL_MODE);
     vPeripheralInit();
 
-    xTaskCreate( vTemperatureTask, "vTemperatureTask", 256, NULL, 1, NULL );
-    xTaskCreate( vDetectionTask, "vDetectionTask", 256, NULL, 1, NULL );
+//    xTaskCreate( vTemperatureTask, "vTemperatureTask", 256, NULL, 1, NULL );
+//    xTaskCreate( vDetectionTask, "vDetectionTask", 256, NULL, 1, NULL );
     xTaskCreate( vDisplayTask, "vDisplayTask", 256, NULL, 2, NULL );
 }
