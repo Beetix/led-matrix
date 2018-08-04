@@ -111,13 +111,53 @@ void vDisplayInterruptHandler( void )
 
 void pset(UG_S16 x, UG_S16 y, UG_COLOR col)
 {
-    if ( col > 0 )
+    brightness[y][x] = col;
+}
+
+void leftShiftFrame(int xTopLeft, int yTopLeft, int xBottomRight, int yBottomRight)
+{
+    for(int col = xTopLeft; col < xBottomRight; col++)
     {
-        brightness[y][x] = col;
+        for(int row = yTopLeft; row < yBottomRight; row++)
+        {
+            brightness[row][col] = brightness[row][col + 1];
+        }
     }
-    else
+}
+
+void scrollText(char text[], const UG_FONT* font )
+{
+    char * currentChar = text;
+    while(*currentChar)
     {
-        brightness[y][x] = col;
+        for(int x = 0; x < font->char_width; x++)
+        {
+            leftShiftFrame(0, 0, MATRIX_COLUMNS - 1, font->char_height);
+            int index = ( *currentChar - font->start_char)* font->char_height;
+            for(int y = 0; y < font->char_height; y++)
+            {
+                if (font->p[index++] & (1 << x))
+                    pset(14-1,y,2);
+                else
+                    pset(14-1,y,0);
+            }
+
+            updateDisplay();
+            vTaskDelayUntil( &xLastWakeTime, 200 / portTICK_PERIOD_MS );
+        }
+        currentChar++;
+    }
+    for(int col=0; col < MATRIX_COLUMNS; col++)
+    {
+        leftShiftFrame(0, 0, MATRIX_COLUMNS - 1, font->char_height);
+
+        for(int y = 0; y < font->char_height; y++)
+        {
+            pset(14-1,y,0);
+        }
+
+        updateDisplay();
+        vTaskDelayUntil( &xLastWakeTime, 200 / portTICK_PERIOD_MS );
     }
 }
 
@@ -135,17 +175,9 @@ void vDisplayTask( void *pvParameters )
     UG_FontSelect(&FONT_8X12);
 
     char greeting[] = "LED MATRIX";
-    char * currentChar = greeting;
-    while (*currentChar)
-    {
-        UG_PutChar(*currentChar,3,1,foreBrightness,0);
-        updateDisplay();
-        vTaskDelayUntil( &xLastWakeTime, 200 / portTICK_PERIOD_MS );
-        currentChar++;
-    }
+    scrollText(greeting, &FONT_8X12);
 
     UG_FontSelect(&FONT_4X6);
-
     char displayChar = 'A';
 
     while (1)
